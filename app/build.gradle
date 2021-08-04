@@ -54,4 +54,7 @@ dependencies {
 
     //ML kit for face detection
     implementation 'com.google.mlkit:face-detection:16.1.2'
+
+    implementation 'com.google.code.gson:gson:2.8.6'
+    implementation 'com.google.guava:guava:27.1-android'
 }

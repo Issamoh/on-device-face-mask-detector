@@ -2,14 +2,10 @@ package com.issamoh.facemaskdetector
 
 import android.Manifest
 import android.annotation.SuppressLint
-import android.app.Activity
-import android.content.Context
 import android.content.pm.PackageManager
 import android.os.Build
 import android.os.Bundle
 import android.util.Log
-import android.view.View
-import android.view.ViewGroup
 import android.widget.Toast
 import androidx.annotation.RequiresApi
 import androidx.appcompat.app.AppCompatActivity
@@ -19,18 +15,19 @@ import androidx.camera.view.PreviewView
 import androidx.core.app.ActivityCompat
 import androidx.core.content.ContextCompat
 import com.google.mlkit.vision.common.InputImage
-import com.google.mlkit.vision.face.Face
 import com.google.mlkit.vision.face.FaceDetection
 import com.google.mlkit.vision.face.FaceDetector
 import com.google.mlkit.vision.face.FaceDetectorOptions
 import kotlinx.android.synthetic.main.activity_main.*
-import java.lang.Integer.min
 import java.util.concurrent.ExecutorService
 import java.util.concurrent.Executors
 
 
 class MainActivity : AppCompatActivity() {
     private lateinit var cameraExecutor: ExecutorService
+    private lateinit var graphicOverlay: GraphicOverlay
+    private lateinit var viewFinder: PreviewView
+
     override fun onCreate(savedInstanceState: Bundle?) {
         super.onCreate(savedInstanceState)
         setContentView(R.layout.activity_main)
@@ -44,6 +41,10 @@ class MainActivity : AppCompatActivity() {
             )
         }
         cameraExecutor = Executors.newSingleThreadExecutor()
+
+        //an overlay in top of the camera preview in order to draw on it boxes and labels
+        graphicOverlay = findViewById(R.id.graphicOverlay)
+        viewFinder = findViewById(R.id.viewFinder)
     }
 
 
@@ -65,11 +66,11 @@ class MainActivity : AppCompatActivity() {
                 .setBackpressureStrategy(ImageAnalysis.STRATEGY_KEEP_ONLY_LATEST)// in order to only one image will be delivered for analysis at a time(from docs)
                 .build()
                 .also {
-                    it.setAnalyzer(cameraExecutor, FaceAnalyzer(this))
+                    it.setAnalyzer(cameraExecutor, FaceAnalyzer(graphicOverlay, lensFacing))
                 }
 
             // Select back camera as a default
-            val cameraSelector = CameraSelector.DEFAULT_BACK_CAMERA
+            val cameraSelector = lensFacing
 
             try {
                 // Unbind use cases before rebinding
@@ -114,36 +115,51 @@ class MainActivity : AppCompatActivity() {
         private const val TAG = "CameraXBasic"
         private const val REQUEST_CODE_PERMISSIONS = 10
         private val REQUIRED_PERMISSIONS = arrayOf(Manifest.permission.CAMERA)
+        private var lensFacing = CameraSelector.DEFAULT_BACK_CAMERA
 
     }
 }
-private class FaceAnalyzer(val context:Context):ImageAnalysis.Analyzer{
+private class FaceAnalyzer(val graphicOverlay: GraphicOverlay, val lensFacing: CameraSelector):ImageAnalysis.Analyzer{
     private val detector: FaceDetector
+    val overlay = graphicOverlay
    init{
        val options = FaceDetectorOptions.Builder()
         .setPerformanceMode(FaceDetectorOptions.PERFORMANCE_MODE_FAST)
         .enableTracking()
         .build()
      detector = FaceDetection.getClient(options)
+
    }
     @RequiresApi(Build.VERSION_CODES.N)
     @SuppressLint("UnsafeOptInUsageError")
     override fun analyze(imageP: ImageProxy) {
         val mediaImage = imageP.getImage()
-        val viewFinder = (context as Activity).findViewById<PreviewView>(R.id.viewFinder)
-        val boxPrediction = (context as Activity).findViewById<View>(R.id.boxPrediction)
         if (mediaImage != null) {
+            val isImageFlipped = lensFacing.equals(CameraSelector.LENS_FACING_FRONT)
+            val rotationDegrees = imageP.imageInfo.rotationDegrees
+            if (rotationDegrees == 0 || rotationDegrees == 180) {
+                overlay.setImageSourceInfo(
+                    imageP.width, imageP.height, isImageFlipped
+                )
+            } else {
+                overlay.setImageSourceInfo(
+                    imageP.height, imageP.width, isImageFlipped
+                )
+            }
+            overlay.clear()
             val image = InputImage.fromMediaImage(mediaImage, imageP.imageInfo.rotationDegrees)
             val result = detector.process(image)
                 .addOnSuccessListener { faces ->
                   for (face in faces) {
-                      Log.d("aaa","one face detected")
-                       val bounding =  face.boundingBox
+                      Log.d("Face mask detector","one face detected")
+                      overlay.add(FaceGraphic(overlay, face))
                     }
+                    overlay.postInvalidate()
                     imageP.close()
                 }
                 .addOnFailureListener { e ->
                     imageP.close()
+
                 }
 
         }
