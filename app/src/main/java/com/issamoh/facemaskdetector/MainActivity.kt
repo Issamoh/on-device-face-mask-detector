@@ -2,28 +2,48 @@ package com.issamoh.facemaskdetector
 
 import android.Manifest
 import android.annotation.SuppressLint
+import android.app.Activity
+import android.content.Context
+import android.content.ContextWrapper
 import android.content.pm.PackageManager
+import android.graphics.*
+import android.graphics.Bitmap.createBitmap
 import android.os.Build
 import android.os.Bundle
+import android.os.Environment
+import android.provider.MediaStore
 import android.util.Log
+import android.widget.ImageView
 import android.widget.Toast
 import androidx.annotation.RequiresApi
 import androidx.appcompat.app.AppCompatActivity
-import androidx.camera.core.*
+import androidx.camera.core.CameraSelector
+import androidx.camera.core.ImageAnalysis
+import androidx.camera.core.ImageProxy
+import androidx.camera.core.Preview
 import androidx.camera.lifecycle.ProcessCameraProvider
 import androidx.camera.view.PreviewView
 import androidx.core.app.ActivityCompat
 import androidx.core.content.ContextCompat
+import com.google.common.math.Quantiles.scale
 import com.google.mlkit.vision.common.InputImage
 import com.google.mlkit.vision.face.FaceDetection
 import com.google.mlkit.vision.face.FaceDetector
 import com.google.mlkit.vision.face.FaceDetectorOptions
-import kotlinx.android.synthetic.main.activity_main.*
+import com.issamoh.facemaskdetector.ml.MaskDetector
+import org.tensorflow.lite.support.image.TensorImage
+import java.io.*
+import java.util.*
 import java.util.concurrent.ExecutorService
 import java.util.concurrent.Executors
+import kotlin.collections.AbstractCollection
 
 
 class MainActivity : AppCompatActivity() {
+    private lateinit var b2:Bitmap
+    private lateinit var b1:Bitmap
+    private lateinit var contextWrapper: ContextWrapper
+    private lateinit var maskDetector: MaskDetector
     private lateinit var cameraExecutor: ExecutorService
     private lateinit var graphicOverlay: GraphicOverlay
     private lateinit var viewFinder: PreviewView
@@ -45,6 +65,21 @@ class MainActivity : AppCompatActivity() {
         //an overlay in top of the camera preview in order to draw on it boxes and labels
         graphicOverlay = findViewById(R.id.graphicOverlay)
         viewFinder = findViewById(R.id.viewFinder)
+
+         maskDetector = MaskDetector.newInstance(this)
+
+        var istr1: InputStream? = null
+        var istr2: InputStream? = null
+        try {
+            istr1 = application.assets.open("1.png")
+            istr2 = application.assets.open("2.png")
+        } catch (e: IOException) {
+            e.printStackTrace()
+        }
+         b1 = BitmapFactory.decodeStream(istr1)
+         b2 = BitmapFactory.decodeStream(istr2)
+
+        contextWrapper =  ContextWrapper(getApplicationContext())
     }
 
 
@@ -66,7 +101,7 @@ class MainActivity : AppCompatActivity() {
                 .setBackpressureStrategy(ImageAnalysis.STRATEGY_KEEP_ONLY_LATEST)// in order to only one image will be delivered for analysis at a time(from docs)
                 .build()
                 .also {
-                    it.setAnalyzer(cameraExecutor, FaceAnalyzer(graphicOverlay, lensFacing))
+                    it.setAnalyzer(cameraExecutor, FaceAnalyzer(graphicOverlay, lensFacing,maskDetector,b1,b2,this,viewFinder))
                 }
 
             // Select back camera as a default
@@ -119,40 +154,82 @@ class MainActivity : AppCompatActivity() {
 
     }
 }
-private class FaceAnalyzer(val graphicOverlay: GraphicOverlay, val lensFacing: CameraSelector):ImageAnalysis.Analyzer{
+private class FaceAnalyzer(
+    val graphicOverlay: GraphicOverlay,
+    val lensFacing: CameraSelector,
+    val maskDetector: MaskDetector,
+    val b1: Bitmap,
+    val b2: Bitmap,
+    val context: Context,
+    val previewView:PreviewView
+):ImageAnalysis.Analyzer{
     private val detector: FaceDetector
     val overlay = graphicOverlay
+     val image1: ImageView
+     val image2: ImageView
+    lateinit var correctionMatrix: Matrix
    init{
        val options = FaceDetectorOptions.Builder()
         .setPerformanceMode(FaceDetectorOptions.PERFORMANCE_MODE_FAST)
         .enableTracking()
         .build()
      detector = FaceDetection.getClient(options)
-
+        image1 = (context as Activity).findViewById<ImageView>(R.id.image1)
+        image2 = (context as Activity).findViewById<ImageView>(R.id.image2)
    }
     @RequiresApi(Build.VERSION_CODES.N)
     @SuppressLint("UnsafeOptInUsageError")
     override fun analyze(imageP: ImageProxy) {
+        correctionMatrix = getCorrectionMatrix(imageP,previewView)
         val mediaImage = imageP.getImage()
         if (mediaImage != null) {
             val isImageFlipped = lensFacing.equals(CameraSelector.LENS_FACING_FRONT)
             val rotationDegrees = imageP.imageInfo.rotationDegrees
+            overlay.clear()
+            val image = InputImage.fromMediaImage(mediaImage, imageP.imageInfo.rotationDegrees)
+            var flip =  Matrix()
             if (rotationDegrees == 0 || rotationDegrees == 180) {
                 overlay.setImageSourceInfo(
                     imageP.width, imageP.height, isImageFlipped
                 )
+               // flip.postScale(1F, -1F, previewView.width / 2.0f, previewView.height / 2.0f)
             } else {
                 overlay.setImageSourceInfo(
                     imageP.height, imageP.width, isImageFlipped
                 )
+               //flip.postScale(-1F, 1F, previewView.width / 2.0f, previewView.height / 2.0f)
             }
-            overlay.clear()
-            val image = InputImage.fromMediaImage(mediaImage, imageP.imageInfo.rotationDegrees)
+
+
+            val bitmapImage = imageP.toBitmap()
+            var done = false
             val result = detector.process(image)
                 .addOnSuccessListener { faces ->
-                  for (face in faces) {
-                      Log.d("Face mask detector","one face detected")
-                      overlay.add(FaceGraphic(overlay, face))
+                    for (face in faces) {
+                        Log.d("Face mask detector", "one face detected")
+                        val  faceGraphic = FaceGraphic(overlay, face)
+                        val bounding = face.boundingBox
+                        val boundingF = RectF(bounding)
+                        correctionMatrix.mapRect(boundingF)
+                        flip.postRotate(90F)
+                        flip.mapRect(boundingF)
+                       // val boundingF = faceGraphic.updateCoordinates()
+                        val faceBmpBigSize = cropBitmap(bitmapImage, boundingF)
+                        val faceBmp = getResizedBitmap(faceBmpBigSize,224,224)
+                        if(!done){
+                            image1.setImageBitmap(faceBmpBigSize)
+                            image2.setImageBitmap(faceBmp)
+                            done = true
+                        }
+                         val tfImage = TensorImage.fromBitmap(faceBmpBigSize)
+                       // val tfImage = TensorImage.fromBitmap(b2) was for test purposes
+                        val outputs = maskDetector.process(tfImage)
+                        .probabilityAsCategoryList.apply {
+                                    sortByDescending { it.score } // Sort with highest confidence first
+                                }.take(3) // take the top results*/
+                        //           Log.d("Face mask detector", outputs.get(0).label+" "+outputs.get(0).score)
+                        Log.d("Face mask detector", outputs.toString())
+                        overlay.add(faceGraphic)
                     }
                     overlay.postInvalidate()
                     imageP.close()
@@ -161,9 +238,87 @@ private class FaceAnalyzer(val graphicOverlay: GraphicOverlay, val lensFacing: C
                     imageP.close()
 
                 }
-
         }
 
+    }
+    private fun ImageProxy.toBitmap(): Bitmap {
+        val yBuffer = planes[0].buffer // Y
+        val uBuffer = planes[1].buffer // U
+        val vBuffer = planes[2].buffer // V
+
+        val ySize = yBuffer.remaining()
+        val uSize = uBuffer.remaining()
+        val vSize = vBuffer.remaining()
+
+        val nv21 = ByteArray(ySize + uSize + vSize)
+
+        yBuffer.get(nv21, 0, ySize)
+        vBuffer.get(nv21, ySize, vSize)
+        uBuffer.get(nv21, ySize + vSize, uSize)
+
+        val yuvImage = YuvImage(nv21, ImageFormat.NV21, this.width, this.height, null)
+        val out = ByteArrayOutputStream()
+        yuvImage.compressToJpeg(Rect(0, 0, yuvImage.width, yuvImage.height), 100, out)
+        val imageBytes = out.toByteArray()
+        return BitmapFactory.decodeByteArray(imageBytes, 0, imageBytes.size)
+    }
+    private fun cropBitmap(bitmap :Bitmap, rect:RectF):Bitmap {
+        val w = rect.right - rect.left
+        val h = rect.bottom - rect.top;
+        val ret = createBitmap(w.toInt(), h.toInt(), bitmap.getConfig())
+        val canvas = Canvas(ret)
+        val left = (-rect.left).toFloat()
+        val top = -rect.top.toFloat()
+        canvas.drawBitmap(bitmap, left , top , null);
+        return ret
+}
+    fun getResizedBitmap(image: Bitmap?, bitmapWidth: Int, bitmapHeight: Int): Bitmap? {
+        return Bitmap.createScaledBitmap(image!!, bitmapWidth, bitmapHeight, true)
+    }
+
+    fun getCorrectionMatrix(imageProxy: ImageProxy, previewView: PreviewView) : Matrix {
+        val cropRect = imageProxy.cropRect
+        val rotationDegrees = imageProxy.imageInfo.rotationDegrees
+        val matrix = Matrix()
+
+        // A float array of the source vertices (crop rect) in clockwise order.
+        val source = floatArrayOf(
+            cropRect.left.toFloat(),
+            cropRect.top.toFloat(),
+            cropRect.right.toFloat(),
+            cropRect.top.toFloat(),
+            cropRect.right.toFloat(),
+            cropRect.bottom.toFloat(),
+            cropRect.left.toFloat(),
+            cropRect.bottom.toFloat()
+        )
+
+        // A float array of the destination vertices in clockwise order.
+        val destination = floatArrayOf(
+            0f,
+            0f,
+            previewView.width.toFloat(),
+            0f,
+            previewView.width.toFloat(),
+            previewView.height.toFloat(),
+            0f,
+            previewView.height.toFloat()
+        )
+
+        // The destination vertexes need to be shifted based on rotation degrees. The
+        // rotation degree represents the clockwise rotation needed to correct the image.
+
+        // Each vertex is represented by 2 float numbers in the vertices array.
+        val vertexSize = 2
+        // The destination needs to be shifted 1 vertex for every 90° rotation.
+        val shiftOffset = rotationDegrees / 90 * vertexSize;
+        val tempArray = destination.clone()
+        for (toIndex in source.indices) {
+            val fromIndex = (toIndex + shiftOffset) % source.size
+            destination[toIndex] = tempArray[fromIndex]
+        }
+        matrix.setPolyToPoly(source, 0, destination, 0, 4)
+        return matrix
     }
 
 }

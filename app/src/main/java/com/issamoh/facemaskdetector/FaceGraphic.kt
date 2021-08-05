@@ -19,6 +19,7 @@ package com.issamoh.facemaskdetector
 import android.graphics.Canvas
 import android.graphics.Color
 import android.graphics.Paint
+import android.graphics.Rect
 import com.issamoh.facemaskdetector.GraphicOverlay
 import com.issamoh.facemaskdetector.GraphicOverlay.Graphic
 import com.google.mlkit.vision.face.Face
@@ -32,12 +33,13 @@ import kotlin.math.max
  * Graphic instance for rendering face position, contour, and landmarks within the associated
  * graphic overlay view.
  */
-class FaceGraphic constructor(overlay: GraphicOverlay?, private val face: Face) : Graphic(overlay) {
+class FaceGraphic constructor( overlay: GraphicOverlay? , private val face: Face) : Graphic(overlay) {
   private val facePositionPaint: Paint
   private val numColors = COLORS.size
   private val idPaints = Array(numColors) { Paint() }
   private val boxPaints = Array(numColors) { Paint() }
   private val labelPaints = Array(numColors) { Paint() }
+
 
   init {
     val selectedColor = Color.WHITE
@@ -234,6 +236,19 @@ class FaceGraphic constructor(overlay: GraphicOverlay?, private val face: Face) 
         facePositionPaint
       )
     }
+  }
+
+  public  fun updateCoordinates():Rect{
+    val x = translateX(face.boundingBox.centerX().toFloat())
+    val y = translateY(face.boundingBox.centerY().toFloat())
+
+    // Calculate positions.
+    val left = x - scale(face.boundingBox.width() / 2.0f)
+    val top = y - scale(face.boundingBox.height() / 2.0f)
+    val right = x + scale(face.boundingBox.width() / 2.0f)
+    val bottom = y + scale(face.boundingBox.height() / 2.0f)
+
+    return Rect(left.toInt(),top.toInt(),right.toInt(),bottom.toInt())
   }
 
   companion object {
