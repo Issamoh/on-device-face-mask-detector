@@ -36,13 +36,14 @@ import java.io.*
 import java.util.*
 import java.util.concurrent.ExecutorService
 import java.util.concurrent.Executors
+import java.util.Timer
+import kotlin.concurrent.schedule
 import kotlin.collections.AbstractCollection
 
 
 class MainActivity : AppCompatActivity() {
     private lateinit var b2:Bitmap
     private lateinit var b1:Bitmap
-    private lateinit var contextWrapper: ContextWrapper
     private lateinit var maskDetector: MaskDetector
     private lateinit var cameraExecutor: ExecutorService
     private lateinit var graphicOverlay: GraphicOverlay
@@ -79,7 +80,6 @@ class MainActivity : AppCompatActivity() {
          b1 = BitmapFactory.decodeStream(istr1)
          b2 = BitmapFactory.decodeStream(istr2)
 
-        contextWrapper =  ContextWrapper(getApplicationContext())
     }
 
 
@@ -165,17 +165,12 @@ private class FaceAnalyzer(
 ):ImageAnalysis.Analyzer{
     private val detector: FaceDetector
     val overlay = graphicOverlay
-     val image1: ImageView
-     val image2: ImageView
     lateinit var correctionMatrix: Matrix
    init{
        val options = FaceDetectorOptions.Builder()
         .setPerformanceMode(FaceDetectorOptions.PERFORMANCE_MODE_FAST)
-        .enableTracking()
         .build()
      detector = FaceDetection.getClient(options)
-        image1 = (context as Activity).findViewById<ImageView>(R.id.image1)
-        image2 = (context as Activity).findViewById<ImageView>(R.id.image2)
    }
     @RequiresApi(Build.VERSION_CODES.N)
     @SuppressLint("UnsafeOptInUsageError")
@@ -207,32 +202,31 @@ private class FaceAnalyzer(
                 .addOnSuccessListener { faces ->
                     for (face in faces) {
                         Log.d("Face mask detector", "one face detected")
-                        val  faceGraphic = FaceGraphic(overlay, face)
-                        val bounding = face.boundingBox
-                        val boundingF = RectF(bounding)
-                        correctionMatrix.mapRect(boundingF)
-                        flip.postRotate(90F)
-                        flip.mapRect(boundingF)
-                       // val boundingF = faceGraphic.updateCoordinates()
-                        val faceBmpBigSize = cropBitmap(bitmapImage, boundingF)
-                        val faceBmp = getResizedBitmap(faceBmpBigSize,224,224)
-                        if(!done){
-                            image1.setImageBitmap(faceBmpBigSize)
-                            image2.setImageBitmap(faceBmp)
-                            done = true
-                        }
-                         val tfImage = TensorImage.fromBitmap(faceBmpBigSize)
+
+                       val bounding = face.boundingBox
+                        val faceBmp = cropBitmap(bitmapImage, bounding)
+                        val correctedBmp = Bitmap.createBitmap(faceBmp, 0, 0, faceBmp.getWidth(), faceBmp.getHeight(), correctionMatrix, true);
+                         val tfImage = TensorImage.fromBitmap(correctedBmp)
                        // val tfImage = TensorImage.fromBitmap(b2) was for test purposes
-                        val outputs = maskDetector.process(tfImage)
+                        val output = maskDetector.process(tfImage)
                         .probabilityAsCategoryList.apply {
                                     sortByDescending { it.score } // Sort with highest confidence first
-                                }.take(3) // take the top results*/
+                                }.take(3).get(0) // take the top results*/
                         //           Log.d("Face mask detector", outputs.get(0).label+" "+outputs.get(0).score)
-                        Log.d("Face mask detector", outputs.toString())
-                        overlay.add(faceGraphic)
+                        Log.d("Face mask detector", output.toString())
+                        if(output.score >0.5){
+                        if(output.label.equals("WithMask")){
+                            overlay.add(FaceGraphic(overlay,face,"with mask",9))
+                        }
+                        else{
+                            overlay.add(FaceGraphic(overlay,face,"without mask",3))
+                        }
+                        }
                     }
                     overlay.postInvalidate()
-                    imageP.close()
+                    Timer("SettingUp", false).schedule(600) {
+                        imageP.close()
+                    }
                 }
                 .addOnFailureListener { e ->
                     imageP.close()
@@ -262,7 +256,7 @@ private class FaceAnalyzer(
         val imageBytes = out.toByteArray()
         return BitmapFactory.decodeByteArray(imageBytes, 0, imageBytes.size)
     }
-    private fun cropBitmap(bitmap :Bitmap, rect:RectF):Bitmap {
+    private fun cropBitmap(bitmap :Bitmap, rect:Rect):Bitmap {
         val w = rect.right - rect.left
         val h = rect.bottom - rect.top;
         val ret = createBitmap(w.toInt(), h.toInt(), bitmap.getConfig())

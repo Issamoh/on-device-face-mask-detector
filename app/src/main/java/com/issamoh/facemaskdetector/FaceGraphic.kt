@@ -33,7 +33,8 @@ import kotlin.math.max
  * Graphic instance for rendering face position, contour, and landmarks within the associated
  * graphic overlay view.
  */
-class FaceGraphic constructor( overlay: GraphicOverlay? , private val face: Face) : Graphic(overlay) {
+class FaceGraphic constructor( overlay: GraphicOverlay? , private val face: Face,private val msg:String="with mask",
+                               private var colorI:Int=9) : Graphic(overlay) {
   private val facePositionPaint: Paint
   private val numColors = COLORS.size
   private val idPaints = Array(numColors) { Paint() }
@@ -83,11 +84,11 @@ class FaceGraphic constructor( overlay: GraphicOverlay? , private val face: Face
     var yLabelOffset: Float = if (face.trackingId == null) 0f else -lineHeight
 
     // Decide color based on face ID
-    val colorID =
-      if (face.trackingId == null) 0 else abs(face.trackingId!! % NUM_COLORS)
+    val colorID = colorI
+     // if (face.trackingId == null) 0 else abs(face.trackingId!! % NUM_COLORS)
 
     // Calculate width and height of label box
-    var textWidth = idPaints[colorID].measureText("ID: " + face.trackingId)
+    var textWidth = idPaints[colorID].measureText("ID: " + face.trackingId+" "+msg)
     if (face.smilingProbability != null) {
       yLabelOffset -= lineHeight
       textWidth = max(
@@ -131,10 +132,10 @@ class FaceGraphic constructor( overlay: GraphicOverlay? , private val face: Face
     canvas.drawRect(left, top, right, bottom, boxPaints[colorID])
     if (face.trackingId != null) {
       canvas.drawText(
-        "ID: " + face.trackingId,
+        "ID: " + face.trackingId+" "+msg,
         left,
         top + yLabelOffset,
-        idPaints[colorID]
+        idPaints[8]
       )
       yLabelOffset += lineHeight
     }
